@@ -1,0 +1,16 @@
+{
+  "name": "drawing-exercises",
+  "version": "1.0.0",
+  "description": "Drawing exercises in ClojureScript",
+  "private": true,
+  "dependencies": {
+    "shadow-cljs": "^2.28.0",
+    "wgpu-matrix": "^3.4.2"
+  },
+  "scripts": {
+    "compile": "shadow-cljs compile main",
+    "watch": "shadow-cljs watch main",
+    "test": "shadow-cljs compile test && node test.js",
+    "test:watch": "shadow-cljs watch test"
+  }
+}

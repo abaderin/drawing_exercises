@@ -1,0 +1,9 @@
+node_modules/
+.shadow-cljs/
+.cpcache/
+
+public/js/
+test.js
+
+.DS_Store
+Thumbs.db

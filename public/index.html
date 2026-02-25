@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebGPU Rotating Triangle</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #1a1a2e;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .container {
+      text-align: center;
+    }
+    h1 {
+      color: #eee;
+      margin-bottom: 20px;
+      font-weight: 300;
+    }
+    canvas {
+      border: 2px solid #4a4a6a;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .status {
+      color: #888;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WebGPU Rotating Triangle</h1>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <p class="status" id="status">Initializing WebGPU...</p>
+  </div>
+  <script src="/js/main.js?v=20260225-1300"></script>
+  <script>
+    // Check WebGPU support
+    if (!navigator.gpu) {
+      document.getElementById('status').textContent = 
+        'WebGPU is not supported in this browser. Try Chrome 113+ or Edge.';
+      document.getElementById('status').style.color = '#ff6b6b';
+    } else {
+      drawing_exercises.core.init();
+    }
+  </script>
+</body>
+</html>
