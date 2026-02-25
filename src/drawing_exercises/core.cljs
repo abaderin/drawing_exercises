@@ -1,5 +1,16 @@
 (ns drawing-exercises.core)
 
+(defonce app-state
+  (atom {:canvas nil
+         :device nil
+         :context nil
+         :pipeline nil
+         :buffers nil
+         :bind-group nil
+         :animation-id nil
+         :canvas-format nil
+         :render-error-shown? false}))
+
 (defn load-shader [path]
   (-> (js/fetch path)
       (.then #(.text %))))
@@ -45,7 +56,7 @@
      :entries #js [#js {:binding 0
                         :resource #js {:buffer uniform-buffer}}]}))
 
-(defn resize-canvas [canvas device context]
+(defn resize-canvas [canvas device context canvas-format]
   (let [client-width (.-clientWidth canvas)
         client-height (.-clientHeight canvas)
         width (if (pos? client-width) client-width (.-width canvas))
@@ -58,8 +69,8 @@
     {:width width
      :height height}))
 
-(defn render [device context pipeline bind-group uniform-buffer time]
-  (let [_ (resize-canvas canvas device context)
+(defn render [canvas device context pipeline bind-group uniform-buffer canvas-format time]
+  (let [_ (resize-canvas canvas device context canvas-format)
         time-data (js/Float32Array. #js [time 0 0 0])
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
@@ -77,56 +88,57 @@
     (.end render-pass)
     (-> device .-queue (.submit #js [(.finish command-encoder)]))))
 
-(def canvas nil)
-(def device nil)
-(def context nil)
-(def pipeline nil)
-(def buffers nil)
-(def bind-group nil)
-(def animation-id nil)
-(def canvas-format nil)
-(def render-error-shown? false)
-
 (defn animate [time]
-  (when device
+  (let [{:keys [canvas device context pipeline bind-group buffers canvas-format render-error-shown?]} @app-state]
+    (when device
     (try
-      (render device context pipeline bind-group (:uniform buffers) (/ time 1000))
+      (render canvas device context pipeline bind-group (:uniform buffers) canvas-format (/ time 1000))
       (catch :default err
         (when-not render-error-shown?
-          (set! render-error-shown? true)
+          (swap! app-state assoc :render-error-shown? true)
           (set-status! (str "Render failed: " err) "#ff6b6b"))))
-    (set! animation-id (js/requestAnimationFrame animate))))
+      (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))))
 
 (defn ^:export init []
-  (set! canvas (js/document.getElementById "canvas"))
+  (if (:animation-id @app-state)
+    (js/Promise.resolve :already-running)
+    (do
+      (swap! app-state assoc :canvas (js/document.getElementById "canvas"))
 
-  (-> js/navigator .-gpu (.requestAdapter nil)
-      (.then (fn [adapter]
-               (.requestDevice adapter nil)))
-      (.then (fn [dev]
-               (let [cache-bust (.now js/Date)]
-                 (-> (js/Promise.all #js [(load-shader (str "vertex.wgsl?v=" cache-bust))
-                                          (load-shader (str "fragment.wgsl?v=" cache-bust))])
-                     (.then (fn [[vertex-code fragment-code]]
-                              (set! device dev)
-                              (set! (.-onuncapturederror device)
-                                    (fn [event]
-                                      (set-status! (str "WebGPU error: "
-                                                        (.-message (.-error event)))
-                                                   "#ff6b6b")))
-                              (set! context (.getContext canvas "webgpu"))
-                              (let [format (.getPreferredCanvasFormat (.-gpu js/navigator))]
-                                (set! canvas-format format)
-                                (configure-canvas! context device canvas-format)
-                                (set! pipeline (create-pipeline device canvas-format vertex-code fragment-code))
-                                (set! buffers (create-buffers device))
-                                (set! bind-group (create-bind-group device pipeline (:uniform buffers)))
-                                (set! render-error-shown? false)
-                                (set-status! "Rendering with WebGPU" "#51cf66")
-                                (js/requestAnimationFrame animate))))))))
-      (.catch (fn [err]
-                (set-status! (str "WebGPU init failed: " err) "#ff6b6b")))))
+      (-> js/navigator .-gpu (.requestAdapter nil)
+          (.then (fn [adapter]
+                   (.requestDevice adapter nil)))
+          (.then (fn [dev]
+                   (let [cache-bust (.now js/Date)]
+                     (-> (js/Promise.all #js [(load-shader (str "vertex.wgsl?v=" cache-bust))
+                                              (load-shader (str "fragment.wgsl?v=" cache-bust))])
+                         (.then (fn [[vertex-code fragment-code]]
+                                  (swap! app-state assoc :device dev)
+                                  (set! (.-onuncapturederror dev)
+                                        (fn [event]
+                                          (set-status! (str "WebGPU error: "
+                                                            (.-message (.-error event)))
+                                                       "#ff6b6b")))
+                                  (let [canvas (:canvas @app-state)
+                                        context (.getContext canvas "webgpu")
+                                        format (.getPreferredCanvasFormat (.-gpu js/navigator))
+                                        pipeline (create-pipeline dev format vertex-code fragment-code)
+                                        buffers (create-buffers dev)
+                                        bind-group (create-bind-group dev pipeline (:uniform buffers))]
+                                    (configure-canvas! context dev format)
+                                    (swap! app-state assoc
+                                           :context context
+                                           :canvas-format format
+                                           :pipeline pipeline
+                                           :buffers buffers
+                                           :bind-group bind-group
+                                           :render-error-shown? false)
+                                    (set-status! "Rendering with WebGPU" "#51cf66")
+                                    (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))))))))
+          (.catch (fn [err]
+                    (set-status! (str "WebGPU init failed: " err) "#ff6b6b")))))))
 
 (defn ^:export stop []
-  (when animation-id
-    (js/cancelAnimationFrame animation-id)))
+  (when-let [animation-id (:animation-id @app-state)]
+    (js/cancelAnimationFrame animation-id)
+    (swap! app-state assoc :animation-id nil)))
