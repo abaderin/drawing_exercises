@@ -7,7 +7,7 @@
          :context nil
          :pipeline nil
          :buffers nil
-         :mesh nil
+         :objects []
          :depth-texture nil
          :depth-size nil
          :bind-group nil
@@ -131,18 +131,24 @@
 (defn create-model-matrix [time]
   (.rotationZ mat4 time))
 
-(defn create-frame-uniforms [width height time]
+(defn create-frame-uniforms [width height model time]
   (let [view-projection (create-view-projection-matrix width height)
-        model (create-model-matrix time)
         uniforms (js/Float32Array. 36)]
     (.set uniforms view-projection 0)
     (.set uniforms model 16)
     (aset uniforms 32 time)
     uniforms))
 
-(defn render [canvas ^js device ^js context pipeline bind-group mesh uniform-buffer canvas-format time]
+(defn draw-object! [^js render-pass ^js queue uniform-buffer width height object time]
+  (let [{:keys [mesh model]} object
+        frame-uniforms (create-frame-uniforms width height model time)]
+    (.writeBuffer queue uniform-buffer 0 frame-uniforms)
+    (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
+    (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
+    (.drawIndexed render-pass (:index-count mesh))))
+
+(defn render [canvas ^js device ^js context pipeline bind-group objects uniform-buffer canvas-format time]
   (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
-        frame-uniforms (create-frame-uniforms width height time)
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
         texture-view (.createView texture)
@@ -160,20 +166,18 @@
                          :depthLoadOp "clear"
                          :depthStoreOp "store"}})
         queue (.-queue device)]
-    (.writeBuffer queue uniform-buffer 0 frame-uniforms)
     (.setPipeline render-pass pipeline)
     (.setBindGroup render-pass 0 bind-group)
-    (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
-    (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
-    (.drawIndexed render-pass (:index-count mesh))
+    (doseq [object objects]
+      (draw-object! render-pass queue uniform-buffer width height object time))
     (.end render-pass)
     (.submit queue #js [(.finish command-encoder)])))
 
 (defn animate [time]
-  (let [{:keys [canvas device context pipeline bind-group mesh buffers canvas-format render-error-shown?]} @app-state]
+  (let [{:keys [canvas device context pipeline bind-group objects buffers canvas-format render-error-shown?]} @app-state]
     (when device
       (try
-        (render canvas device context pipeline bind-group mesh (:uniform buffers) canvas-format (/ time 1000))
+        (render canvas device context pipeline bind-group objects (:uniform buffers) canvas-format (/ time 1000))
         (catch :default err
           (when-not render-error-shown?
             (swap! app-state assoc :render-error-shown? true)
@@ -208,19 +212,21 @@
         pipeline (create-pipeline device format vertex-code fragment-code)
         buffers (create-buffers device)
         mesh (create-triangle-mesh device)
+        objects [{:mesh mesh
+                  :model (create-model-matrix 0)}]
         bind-group (create-bind-group device pipeline (:uniform buffers))]
     {:context context
      :canvas-format format
      :pipeline pipeline
      :buffers buffers
-     :mesh mesh
+     :objects objects
      :bind-group bind-group}))
 
 (defn initialize-rendering! [^js device vertex-code fragment-code]
   (swap! app-state assoc :device device)
   (setup-device-error-handler! device)
   (let [canvas (:canvas @app-state)
-        {:keys [context canvas-format pipeline buffers mesh bind-group]}
+        {:keys [context canvas-format pipeline buffers objects bind-group]}
         (create-render-resources canvas device vertex-code fragment-code)]
     (configure-canvas! context device canvas-format)
     (swap! app-state assoc
@@ -228,7 +234,7 @@
            :canvas-format canvas-format
            :pipeline pipeline
            :buffers buffers
-           :mesh mesh
+           :objects objects
            :bind-group bind-group
            :render-error-shown? false)
     (set-status! "Rendering with WebGPU" "#51cf66")
