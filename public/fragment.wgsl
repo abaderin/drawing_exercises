@@ -3,9 +3,12 @@ struct Uniforms {
   model : mat4x4<f32>,
   time : vec4<f32>,
   light_position : vec4<f32>,
+  light_view_projection : mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms : Uniforms;
+@group(0) @binding(1) var shadow_map : texture_depth_2d;
+@group(0) @binding(2) var shadow_sampler : sampler_comparison;
 
 @fragment
 fn fs_main(

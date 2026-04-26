@@ -22,7 +22,7 @@
 (def depth-format "depth24plus")
 (def shadow-map-format "depth32float")
 (def shadow-map-size 1024)
-(def uniform-buffer-byte-size 160)
+(def uniform-buffer-byte-size 224)
 (def light-view-projection-buffer-byte-size 64)
 
 (defn load-shader [path]
@@ -246,11 +246,15 @@
                     (.-COPY_DST js/GPUBufferUsage))
      :mappedAtCreation false}))
 
-(defn create-bind-group [^js device ^js pipeline uniform-buffer]
+(defn create-bind-group [^js device ^js pipeline uniform-buffer ^js shadow-map-view ^js shadow-sampler]
   (.createBindGroup device #js
     {:layout (.getBindGroupLayout pipeline 0)
      :entries #js [#js {:binding 0
-                        :resource #js {:buffer uniform-buffer}}]}))
+                        :resource #js {:buffer uniform-buffer}}
+                   #js {:binding 1
+                        :resource shadow-map-view}
+                   #js {:binding 2
+                        :resource shadow-sampler}]}))
 
 (defn create-depth-texture [^js device width height]
   (.createTexture device #js
@@ -307,10 +311,10 @@
 (defn create-translation-matrix [x y z]
   (.translation mat4 #js [x y z]))
 
-(defn create-frame-uniforms [width height model time light-position light-intensity]
+(defn create-frame-uniforms [width height model time light-position light-intensity light-view-projection]
   (let [view-projection (create-view-projection-matrix width height)
         [light-x light-y light-z] light-position
-        uniforms (js/Float32Array. 40)]
+        uniforms (js/Float32Array. 56)]
     (.set uniforms view-projection 0)
     (.set uniforms model 16)
     (aset uniforms 32 time)
@@ -318,23 +322,24 @@
     (aset uniforms 37 light-y)
     (aset uniforms 38 light-z)
     (aset uniforms 39 light-intensity)
+    (.set uniforms light-view-projection 40)
     uniforms))
 
 (defn marker-model-matrix [light-position]
   (let [[x y z] light-position]
     (create-translation-matrix x y z)))
 
-(defn write-object-uniforms! [^js queue width height object time light-position light-intensity]
+(defn write-object-uniforms! [^js queue width height object time light-position light-intensity light-view-projection]
   (let [{:keys [model uniform-buffer follows-light?]} object
         effective-model (if follows-light?
                           (marker-model-matrix light-position)
                           model)
-        frame-uniforms (create-frame-uniforms width height effective-model time light-position light-intensity)]
+        frame-uniforms (create-frame-uniforms width height effective-model time light-position light-intensity light-view-projection)]
     (.writeBuffer queue uniform-buffer 0 frame-uniforms)))
 
-(defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity]
+(defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity light-view-projection]
   (let [{:keys [mesh bind-group]} object]
-    (write-object-uniforms! queue width height object time light-position light-intensity)
+    (write-object-uniforms! queue width height object time light-position light-intensity light-view-projection)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
     (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
@@ -373,7 +378,7 @@
     (.setPipeline shadow-pass shadow-pipeline)
     (.setBindGroup shadow-pass 1 light-view-projection-bind-group)
     (doseq [object objects]
-      (write-object-uniforms! queue width height object time light-position light-intensity)
+      (write-object-uniforms! queue width height object time light-position light-intensity light-view-projection)
       (.setBindGroup shadow-pass 0 (:bind-group object))
       (.setVertexBuffer shadow-pass 0 (:vertex-buffer (:mesh object)))
       (.setIndexBuffer shadow-pass (:index-buffer (:mesh object)) "uint32")
@@ -392,7 +397,7 @@
                           :depthStoreOp "store"}})]
       (.setPipeline render-pass pipeline)
       (doseq [object objects]
-        (draw-object! render-pass queue width height object time light-position light-intensity))
+        (draw-object! render-pass queue width height object time light-position light-intensity light-view-projection))
       (.end render-pass))
     (.submit queue #js [(.finish command-encoder)])))
 
@@ -432,11 +437,11 @@
       (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))))
 
 (defn create-scene-object
-  ([^js device ^js pipeline mesh model]
-   (create-scene-object device pipeline mesh model nil))
-  ([^js device ^js pipeline mesh model opts]
+  ([^js device ^js pipeline mesh model ^js shadow-map-view ^js shadow-sampler]
+   (create-scene-object device pipeline mesh model shadow-map-view shadow-sampler nil))
+  ([^js device ^js pipeline mesh model ^js shadow-map-view ^js shadow-sampler opts]
    (let [uniform-buffer (create-uniform-buffer device)
-         bind-group (create-bind-group device pipeline uniform-buffer)]
+         bind-group (create-bind-group device pipeline uniform-buffer shadow-map-view shadow-sampler)]
      (merge {:mesh mesh
              :model model
              :uniform-buffer uniform-buffer
@@ -478,6 +483,11 @@
                                                    :buffer #js {:type "uniform"}}]})
         shadow-pipeline (create-shadow-pipeline device shadow-code object-bind-group-layout light-bind-group-layout)
         shadow-map-texture (create-shadow-map-texture device)
+        shadow-map-view (.createView shadow-map-texture)
+        shadow-sampler (.createSampler device #js
+                        {:compare "less"
+                         :magFilter "linear"
+                         :minFilter "linear"})
         light-view-projection-buffer (.createBuffer device #js
                                        {:size light-view-projection-buffer-byte-size
                                         :usage (bit-or (.-UNIFORM js/GPUBufferUsage)
@@ -496,11 +506,11 @@
         identity (.identity mat4)
         cube-model (create-translation-matrix -0.75 0.25 -0.75)
         light-marker-model (marker-model-matrix (:light-position @app-state))
-        objects [(create-scene-object device pipeline floor-mesh identity)
-                 (create-scene-object device pipeline back-wall-mesh identity)
-                 (create-scene-object device pipeline left-wall-mesh identity)
-                 (create-scene-object device pipeline cube-mesh cube-model)
-                 (create-scene-object device pipeline light-marker-mesh light-marker-model {:follows-light? true})]]
+        objects [(create-scene-object device pipeline floor-mesh identity shadow-map-view shadow-sampler)
+                 (create-scene-object device pipeline back-wall-mesh identity shadow-map-view shadow-sampler)
+                 (create-scene-object device pipeline left-wall-mesh identity shadow-map-view shadow-sampler)
+                 (create-scene-object device pipeline cube-mesh cube-model shadow-map-view shadow-sampler)
+                 (create-scene-object device pipeline light-marker-mesh light-marker-model shadow-map-view shadow-sampler {:follows-light? true})]]
     {:context context
      :canvas-format format
      :pipeline pipeline

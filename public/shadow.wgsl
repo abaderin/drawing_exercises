@@ -3,6 +3,7 @@ struct ObjectUniforms {
   model : mat4x4<f32>,
   time : vec4<f32>,
   light_position : vec4<f32>,
+  light_view_projection : mat4x4<f32>,
 }
 
 struct ShadowUniforms {
