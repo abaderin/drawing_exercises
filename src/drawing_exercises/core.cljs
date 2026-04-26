@@ -122,19 +122,28 @@
 (defn start-animation! []
   (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))
 
-(defn initialize-rendering! [^js device vertex-code fragment-code]
-  (swap! app-state assoc :device device)
-  (setup-device-error-handler! device)
-  (let [canvas (:canvas @app-state)
-        context (.getContext canvas "webgpu")
+(defn create-render-resources [^js canvas ^js device vertex-code fragment-code]
+  (let [context (.getContext canvas "webgpu")
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
         buffers (create-buffers device)
         bind-group (create-bind-group device pipeline (:uniform buffers))]
-    (configure-canvas! context device format)
+    {:context context
+     :canvas-format format
+     :pipeline pipeline
+     :buffers buffers
+     :bind-group bind-group}))
+
+(defn initialize-rendering! [^js device vertex-code fragment-code]
+  (swap! app-state assoc :device device)
+  (setup-device-error-handler! device)
+  (let [canvas (:canvas @app-state)
+        {:keys [context canvas-format pipeline buffers bind-group]}
+        (create-render-resources canvas device vertex-code fragment-code)]
+    (configure-canvas! context device canvas-format)
     (swap! app-state assoc
            :context context
-           :canvas-format format
+           :canvas-format canvas-format
            :pipeline pipeline
            :buffers buffers
            :bind-group bind-group
