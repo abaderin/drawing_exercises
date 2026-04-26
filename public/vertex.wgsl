@@ -11,7 +11,7 @@ struct Uniforms {
 
 @vertex
 fn vs_main(
-  @location(0) position : vec2<f32>,
+  @location(0) position : vec3<f32>,
   @location(1) color : vec4<f32>
 ) -> VertexOutput {
   let angle = uniforms.time.x;
@@ -20,7 +20,7 @@ fn vs_main(
   let rotated = vec2<f32>(position.x * c - position.y * s, position.x * s + position.y * c);
 
   var output : VertexOutput;
-  output.position = vec4<f32>(rotated, 0.0, 1.0);
+  output.position = vec4<f32>(rotated, position.z, 1.0);
   output.color = color;
   return output;
 }

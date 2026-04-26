@@ -36,12 +36,12 @@
        :vertex #js
        {:module shader-module
         :entryPoint "vs_main"
-        :buffers #js [#js {:arrayStride 24
+        :buffers #js [#js {:arrayStride 28
                            :attributes #js [#js {:shaderLocation 0
                                                   :offset 0
-                                                  :format "float32x2"}
+                                                  :format "float32x3"}
                                              #js {:shaderLocation 1
-                                                  :offset 8
+                                                  :offset 12
                                                   :format "float32x4"}]}]}
        :fragment #js
        {:module shader-module-frag
@@ -51,9 +51,9 @@
        {:topology "triangle-list"}})))
 
 (defn create-triangle-mesh [^js device]
-  (let [vertex-data (js/Float32Array. #js [0.0 0.8 1.0 0.2 0.2 1.0
-                                           -0.8 -0.8 0.2 1.0 0.2 1.0
-                                           0.8 -0.8 0.2 0.2 1.0 1.0])
+  (let [vertex-data (js/Float32Array. #js [0.0 0.8 0.0 1.0 0.2 0.2 1.0
+                                           -0.8 -0.8 0.0 0.2 1.0 0.2 1.0
+                                           0.8 -0.8 0.0 0.2 0.2 1.0 1.0])
         index-data (js/Uint32Array. #js [0 1 2])
         vertex-buffer (.createBuffer device #js {:size (.-byteLength vertex-data)
                                                  :usage (bit-or (.-VERTEX js/GPUBufferUsage)
