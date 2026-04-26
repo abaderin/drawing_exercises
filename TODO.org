@@ -38,7 +38,7 @@
    рендерит сцену в depth-only текстуру из позиции света, второй
    pass — обычный, но фрагментный шейдер сэмплирует shadow map.
 
-*** TODO 1.2.1 Depth-only пайплайн и shadow map текстура
+*** DONE 1.2.1 Depth-only пайплайн и shadow map текстура
     :PROPERTIES:
     :LOC: ~100
     :END:

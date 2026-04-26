@@ -6,9 +6,13 @@
          :device nil
          :context nil
          :pipeline nil
+         :shadow-pipeline nil
          :objects []
          :depth-texture nil
          :depth-size nil
+         :shadow-map-texture nil
+         :light-view-projection-buffer nil
+         :light-view-projection-bind-group nil
          :animation-id nil
          :canvas-format nil
          :light-position [0.5 1.6 0.8]
@@ -16,7 +20,10 @@
          :render-error-shown? false}))
 
 (def depth-format "depth24plus")
+(def shadow-map-format "depth32float")
+(def shadow-map-size 1024)
 (def uniform-buffer-byte-size 160)
+(def light-view-projection-buffer-byte-size 64)
 
 (defn load-shader [path]
   (-> (js/fetch path)
@@ -83,6 +90,33 @@
        {:topology "triangle-list"}
        :depthStencil #js
        {:format depth-format
+        :depthWriteEnabled true
+        :depthCompare "less"}})))
+
+(defn create-shadow-pipeline [^js device shadow-code ^js object-bind-group-layout ^js light-bind-group-layout]
+  (let [shader-module (.createShaderModule device #js {:code shadow-code})
+        pipeline-layout (.createPipelineLayout device #js
+                          {:bindGroupLayouts #js [object-bind-group-layout
+                                                  light-bind-group-layout]})]
+    (.createRenderPipeline device #js
+      {:layout pipeline-layout
+       :vertex #js
+       {:module shader-module
+        :entryPoint "vs_main"
+        :buffers #js [#js {:arrayStride 40
+                           :attributes #js [#js {:shaderLocation 0
+                                                  :offset 0
+                                                  :format "float32x3"}
+                                             #js {:shaderLocation 1
+                                                  :offset 12
+                                                  :format "float32x3"}
+                                             #js {:shaderLocation 2
+                                                  :offset 24
+                                                  :format "float32x4"}]}]}
+       :primitive #js
+       {:topology "triangle-list"}
+       :depthStencil #js
+       {:format shadow-map-format
         :depthWriteEnabled true
         :depthCompare "less"}})))
 
@@ -224,6 +258,13 @@
      :format depth-format
      :usage (.-RENDER_ATTACHMENT js/GPUTextureUsage)}))
 
+(defn create-shadow-map-texture [^js device]
+  (.createTexture device #js
+    {:size #js [shadow-map-size shadow-map-size]
+     :format shadow-map-format
+     :usage (bit-or (.-TEXTURE_BINDING js/GPUTextureUsage)
+                    (.-RENDER_ATTACHMENT js/GPUTextureUsage))}))
+
 (defn ^js ensure-depth-texture! [device width height]
   (let [depth-size [width height]
         {:keys [depth-texture]} @app-state]
@@ -254,6 +295,12 @@
         view (.lookAt mat4 #js [0.0 2.0 4.0] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
     (.multiply mat4 projection view)))
 
+(defn create-light-view-projection-matrix [light-position]
+  (let [[x y z] light-position
+        projection (.ortho mat4 -2.0 2.0 -2.0 2.0 0.1 10.0)
+        view (.lookAt mat4 #js [x y z] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
+    (.multiply mat4 projection view)))
+
 (defn create-model-matrix [time]
   (.rotationZ mat4 time))
 
@@ -277,48 +324,107 @@
   (let [[x y z] light-position]
     (create-translation-matrix x y z)))
 
-(defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity]
-  (let [{:keys [mesh model uniform-buffer bind-group follows-light?]} object
+(defn write-object-uniforms! [^js queue width height object time light-position light-intensity]
+  (let [{:keys [model uniform-buffer follows-light?]} object
         effective-model (if follows-light?
                           (marker-model-matrix light-position)
                           model)
         frame-uniforms (create-frame-uniforms width height effective-model time light-position light-intensity)]
-    (.writeBuffer queue uniform-buffer 0 frame-uniforms)
+    (.writeBuffer queue uniform-buffer 0 frame-uniforms)))
+
+(defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity]
+  (let [{:keys [mesh bind-group]} object]
+    (write-object-uniforms! queue width height object time light-position light-intensity)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
     (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
     (.drawIndexed render-pass (:index-count mesh))))
 
-(defn render [canvas ^js device ^js context pipeline objects canvas-format time light-position light-intensity]
+(defn render [canvas
+              ^js device
+              ^js context
+              pipeline
+              shadow-pipeline
+              objects
+              canvas-format
+              ^js shadow-map-texture
+              ^js light-view-projection-buffer
+              ^js light-view-projection-bind-group
+              time
+              light-position
+              light-intensity]
   (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
         texture-view (.createView texture)
         depth-texture (ensure-depth-texture! device width height)
         depth-view (.createView depth-texture)
-        render-pass (.beginRenderPass command-encoder #js
-                       {:colorAttachments #js [#js
-                                               {:view texture-view
-                                                :clearValue #js {:r 0.1 :g 0.1 :b 0.1 :a 1.0}
-                                                :loadOp "clear"
-                                                :storeOp "store"}]
-                        :depthStencilAttachment #js
-                        {:view depth-view
-                         :depthClearValue 1.0
-                         :depthLoadOp "clear"
-                         :depthStoreOp "store"}})
-        queue (.-queue device)]
-    (.setPipeline render-pass pipeline)
+        shadow-view (.createView shadow-map-texture)
+        light-view-projection (create-light-view-projection-matrix light-position)
+        queue (.-queue device)
+        _ (.writeBuffer queue light-view-projection-buffer 0 light-view-projection)
+        shadow-pass (.beginRenderPass command-encoder #js
+                      {:colorAttachments #js []
+                       :depthStencilAttachment #js
+                       {:view shadow-view
+                        :depthClearValue 1.0
+                        :depthLoadOp "clear"
+                        :depthStoreOp "store"}})]
+    (.setPipeline shadow-pass shadow-pipeline)
+    (.setBindGroup shadow-pass 1 light-view-projection-bind-group)
     (doseq [object objects]
-      (draw-object! render-pass queue width height object time light-position light-intensity))
-    (.end render-pass)
+      (write-object-uniforms! queue width height object time light-position light-intensity)
+      (.setBindGroup shadow-pass 0 (:bind-group object))
+      (.setVertexBuffer shadow-pass 0 (:vertex-buffer (:mesh object)))
+      (.setIndexBuffer shadow-pass (:index-buffer (:mesh object)) "uint32")
+      (.drawIndexed shadow-pass (:index-count (:mesh object))))
+    (.end shadow-pass)
+    (let [render-pass (.beginRenderPass command-encoder #js
+                        {:colorAttachments #js [#js
+                                                {:view texture-view
+                                                 :clearValue #js {:r 0.1 :g 0.1 :b 0.1 :a 1.0}
+                                                 :loadOp "clear"
+                                                 :storeOp "store"}]
+                         :depthStencilAttachment #js
+                         {:view depth-view
+                          :depthClearValue 1.0
+                          :depthLoadOp "clear"
+                          :depthStoreOp "store"}})]
+      (.setPipeline render-pass pipeline)
+      (doseq [object objects]
+        (draw-object! render-pass queue width height object time light-position light-intensity))
+      (.end render-pass))
     (.submit queue #js [(.finish command-encoder)])))
 
 (defn animate [time]
-  (let [{:keys [canvas device context pipeline objects canvas-format light-position light-intensity render-error-shown?]} @app-state]
+  (let [{:keys [canvas
+                device
+                context
+                pipeline
+                shadow-pipeline
+                objects
+                canvas-format
+                shadow-map-texture
+                light-view-projection-buffer
+                light-view-projection-bind-group
+                light-position
+                light-intensity
+                render-error-shown?]} @app-state]
     (when device
       (try
-        (render canvas device context pipeline objects canvas-format (/ time 1000) light-position light-intensity)
+        (render canvas
+                device
+                context
+                pipeline
+                shadow-pipeline
+                objects
+                canvas-format
+                shadow-map-texture
+                light-view-projection-buffer
+                light-view-projection-bind-group
+                (/ time 1000)
+                light-position
+                light-intensity)
         (catch :default err
           (when-not render-error-shown?
             (swap! app-state assoc :render-error-shown? true)
@@ -347,7 +453,8 @@
 (defn load-shaders []
   (let [cache-bust (.now js/Date)]
     (js/Promise.all #js [(load-shader (str "vertex.wgsl?v=" cache-bust))
-                         (load-shader (str "fragment.wgsl?v=" cache-bust))])))
+                         (load-shader (str "fragment.wgsl?v=" cache-bust))
+                         (load-shader (str "shadow.wgsl?v=" cache-bust))])))
 
 (defn setup-device-error-handler! [^js device]
   (set! (.-onuncapturederror device)
@@ -359,10 +466,28 @@
 (defn start-animation! []
   (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))
 
-(defn create-render-resources [^js canvas ^js device vertex-code fragment-code]
+(defn create-render-resources [^js canvas ^js device vertex-code fragment-code shadow-code]
   (let [context (.getContext canvas "webgpu")
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
+        object-bind-group-layout (.getBindGroupLayout pipeline 0)
+        light-bind-group-layout (.createBindGroupLayout device #js
+                                  {:entries #js [#js
+                                                  {:binding 0
+                                                   :visibility (.-VERTEX js/GPUShaderStage)
+                                                   :buffer #js {:type "uniform"}}]})
+        shadow-pipeline (create-shadow-pipeline device shadow-code object-bind-group-layout light-bind-group-layout)
+        shadow-map-texture (create-shadow-map-texture device)
+        light-view-projection-buffer (.createBuffer device #js
+                                       {:size light-view-projection-buffer-byte-size
+                                        :usage (bit-or (.-UNIFORM js/GPUBufferUsage)
+                                                       (.-COPY_DST js/GPUBufferUsage))
+                                        :mappedAtCreation false})
+        light-view-projection-bind-group (.createBindGroup device #js
+                                           {:layout light-bind-group-layout
+                                            :entries #js [#js
+                                                          {:binding 0
+                                                           :resource #js {:buffer light-view-projection-buffer}}]})
         floor-mesh (create-floor-mesh device)
         back-wall-mesh (create-back-wall-mesh device)
         left-wall-mesh (create-left-wall-mesh device)
@@ -379,28 +504,43 @@
     {:context context
      :canvas-format format
      :pipeline pipeline
-     :objects objects}))
+     :shadow-pipeline shadow-pipeline
+     :objects objects
+     :shadow-map-texture shadow-map-texture
+     :light-view-projection-buffer light-view-projection-buffer
+     :light-view-projection-bind-group light-view-projection-bind-group}))
 
-(defn initialize-rendering! [^js device vertex-code fragment-code]
+(defn initialize-rendering! [^js device vertex-code fragment-code shadow-code]
   (swap! app-state assoc :device device)
   (setup-device-error-handler! device)
   (let [canvas (:canvas @app-state)
-        {:keys [context canvas-format pipeline objects]}
-        (create-render-resources canvas device vertex-code fragment-code)]
+        {:keys [context
+                canvas-format
+                pipeline
+                shadow-pipeline
+                objects
+                shadow-map-texture
+                light-view-projection-buffer
+                light-view-projection-bind-group]}
+        (create-render-resources canvas device vertex-code fragment-code shadow-code)]
     (configure-canvas! context device canvas-format)
     (swap! app-state assoc
            :context context
            :canvas-format canvas-format
            :pipeline pipeline
+           :shadow-pipeline shadow-pipeline
            :objects objects
+           :shadow-map-texture shadow-map-texture
+           :light-view-projection-buffer light-view-projection-buffer
+           :light-view-projection-bind-group light-view-projection-bind-group
            :render-error-shown? false)
     (set-status! "Rendering with WebGPU" "#51cf66")
     (start-animation!)))
 
 (defn initialize-rendering-for-device! [^js device]
   (-> (load-shaders)
-      (.then (fn [[vertex-code fragment-code]]
-               (initialize-rendering! device vertex-code fragment-code)))))
+      (.then (fn [[vertex-code fragment-code shadow-code]]
+               (initialize-rendering! device vertex-code fragment-code shadow-code)))))
 
 (defn ^:export init []
   (if (:animation-id @app-state)
