@@ -16,7 +16,7 @@
          :render-error-shown? false}))
 
 (def depth-format "depth24plus")
-(def uniform-buffer-byte-size 80)
+(def uniform-buffer-byte-size 144)
 
 (defn load-shader [path]
   (-> (js/fetch path)
@@ -128,11 +128,16 @@
         view (.lookAt mat4 #js [0.0 0.0 3.0] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
     (.multiply mat4 projection view)))
 
+(defn create-model-matrix [time]
+  (.rotationZ mat4 time))
+
 (defn create-frame-uniforms [width height time]
   (let [view-projection (create-view-projection-matrix width height)
-        uniforms (js/Float32Array. 20)]
+        model (create-model-matrix time)
+        uniforms (js/Float32Array. 36)]
     (.set uniforms view-projection 0)
-    (aset uniforms 16 time)
+    (.set uniforms model 16)
+    (aset uniforms 32 time)
     uniforms))
 
 (defn render [canvas ^js device ^js context pipeline bind-group mesh uniform-buffer canvas-format time]
