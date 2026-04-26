@@ -11,7 +11,7 @@
          :depth-size nil
          :animation-id nil
          :canvas-format nil
-         :light-direction [0.4 0.8 0.6]
+         :light-position [0.5 1.6 0.8]
          :light-intensity 0.75
          :render-error-shown? false}))
 
@@ -33,15 +33,15 @@
     fallback))
 
 (defn read-light-controls []
-  {:direction [(parse-slider-value "light-x" 0.4)
-               (parse-slider-value "light-y" 0.8)
-               (parse-slider-value "light-z" 0.6)]
+  {:position [(parse-slider-value "light-x" 0.5)
+              (parse-slider-value "light-y" 1.6)
+              (parse-slider-value "light-z" 0.8)]
    :intensity (parse-slider-value "light-intensity" 0.75)})
 
 (defn sync-light-from-controls! []
-  (let [{:keys [direction intensity]} (read-light-controls)]
+  (let [{:keys [position intensity]} (read-light-controls)]
     (swap! app-state assoc
-           :light-direction direction
+           :light-position position
            :light-intensity intensity)))
 
 (defn setup-light-controls! []
@@ -222,9 +222,9 @@
 (defn create-translation-matrix [x y z]
   (.translation mat4 #js [x y z]))
 
-(defn create-frame-uniforms [width height model time light-direction light-intensity]
+(defn create-frame-uniforms [width height model time light-position light-intensity]
   (let [view-projection (create-view-projection-matrix width height)
-        [light-x light-y light-z] light-direction
+        [light-x light-y light-z] light-position
         uniforms (js/Float32Array. 40)]
     (.set uniforms view-projection 0)
     (.set uniforms model 16)
@@ -235,16 +235,16 @@
     (aset uniforms 39 light-intensity)
     uniforms))
 
-(defn draw-object! [^js render-pass ^js queue width height object time light-direction light-intensity]
+(defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity]
   (let [{:keys [mesh model uniform-buffer bind-group]} object
-        frame-uniforms (create-frame-uniforms width height model time light-direction light-intensity)]
+        frame-uniforms (create-frame-uniforms width height model time light-position light-intensity)]
     (.writeBuffer queue uniform-buffer 0 frame-uniforms)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
     (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
     (.drawIndexed render-pass (:index-count mesh))))
 
-(defn render [canvas ^js device ^js context pipeline objects canvas-format time light-direction light-intensity]
+(defn render [canvas ^js device ^js context pipeline objects canvas-format time light-position light-intensity]
   (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
@@ -265,15 +265,15 @@
         queue (.-queue device)]
     (.setPipeline render-pass pipeline)
     (doseq [object objects]
-      (draw-object! render-pass queue width height object time light-direction light-intensity))
+      (draw-object! render-pass queue width height object time light-position light-intensity))
     (.end render-pass)
     (.submit queue #js [(.finish command-encoder)])))
 
 (defn animate [time]
-  (let [{:keys [canvas device context pipeline objects canvas-format light-direction light-intensity render-error-shown?]} @app-state]
+  (let [{:keys [canvas device context pipeline objects canvas-format light-position light-intensity render-error-shown?]} @app-state]
     (when device
       (try
-        (render canvas device context pipeline objects canvas-format (/ time 1000) light-direction light-intensity)
+        (render canvas device context pipeline objects canvas-format (/ time 1000) light-position light-intensity)
         (catch :default err
           (when-not render-error-shown?
             (swap! app-state assoc :render-error-shown? true)

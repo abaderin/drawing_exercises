@@ -2,7 +2,7 @@ struct Uniforms {
   view_projection : mat4x4<f32>,
   model : mat4x4<f32>,
   time : vec4<f32>,
-  light_direction : vec4<f32>,
+  light_position : vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms : Uniforms;
@@ -10,10 +10,11 @@ struct Uniforms {
 @fragment
 fn fs_main(
   @location(0) color : vec4<f32>,
-  @location(1) normal : vec3<f32>
+  @location(1) normal : vec3<f32>,
+  @location(2) world_position : vec3<f32>
 ) -> @location(0) vec4<f32> {
-  let light_direction = normalize(uniforms.light_direction.xyz);
-  let light_intensity = uniforms.light_direction.w;
+  let light_direction = normalize(uniforms.light_position.xyz - world_position);
+  let light_intensity = uniforms.light_position.w;
   let ambient = 0.25;
   let diffuse = max(dot(normalize(normal), light_direction), 0.0);
   let lit_color = color.rgb * (ambient + diffuse * light_intensity);

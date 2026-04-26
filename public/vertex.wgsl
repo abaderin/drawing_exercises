@@ -2,13 +2,14 @@ struct VertexOutput {
   @builtin(position) position : vec4<f32>,
   @location(0) color : vec4<f32>,
   @location(1) normal : vec3<f32>,
+  @location(2) world_position : vec3<f32>,
 }
 
 struct Uniforms {
   view_projection : mat4x4<f32>,
   model : mat4x4<f32>,
   time : vec4<f32>,
-  light_direction : vec4<f32>,
+  light_position : vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms : Uniforms;
@@ -25,5 +26,6 @@ fn vs_main(
   output.position = uniforms.view_projection * world_position;
   output.color = color;
   output.normal = world_normal;
+  output.world_position = world_position.xyz;
   return output;
 }
