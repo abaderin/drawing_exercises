@@ -6,11 +6,9 @@
          :device nil
          :context nil
          :pipeline nil
-         :buffers nil
          :objects []
          :depth-texture nil
          :depth-size nil
-         :bind-group nil
          :animation-id nil
          :canvas-format nil
          :render-error-shown? false}))
@@ -78,13 +76,12 @@
      :index-buffer index-buffer
      :index-count 3}))
 
-(defn create-buffers [^js device]
-  (let [uniform-buffer (.createBuffer device #js
-                         {:size uniform-buffer-byte-size
-                          :usage (bit-or (.-UNIFORM js/GPUBufferUsage)
-                                         (.-COPY_DST js/GPUBufferUsage))
-                          :mappedAtCreation false})]
-    {:uniform uniform-buffer}))
+(defn create-uniform-buffer [^js device]
+  (.createBuffer device #js
+    {:size uniform-buffer-byte-size
+     :usage (bit-or (.-UNIFORM js/GPUBufferUsage)
+                    (.-COPY_DST js/GPUBufferUsage))
+     :mappedAtCreation false}))
 
 (defn create-bind-group [^js device ^js pipeline uniform-buffer]
   (.createBindGroup device #js
@@ -139,15 +136,16 @@
     (aset uniforms 32 time)
     uniforms))
 
-(defn draw-object! [^js render-pass ^js queue uniform-buffer width height object time]
-  (let [{:keys [mesh model]} object
+(defn draw-object! [^js render-pass ^js queue width height object time]
+  (let [{:keys [mesh model uniform-buffer bind-group]} object
         frame-uniforms (create-frame-uniforms width height model time)]
     (.writeBuffer queue uniform-buffer 0 frame-uniforms)
+    (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
     (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
     (.drawIndexed render-pass (:index-count mesh))))
 
-(defn render [canvas ^js device ^js context pipeline bind-group objects uniform-buffer canvas-format time]
+(defn render [canvas ^js device ^js context pipeline objects canvas-format time]
   (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
@@ -167,22 +165,29 @@
                          :depthStoreOp "store"}})
         queue (.-queue device)]
     (.setPipeline render-pass pipeline)
-    (.setBindGroup render-pass 0 bind-group)
     (doseq [object objects]
-      (draw-object! render-pass queue uniform-buffer width height object time))
+      (draw-object! render-pass queue width height object time))
     (.end render-pass)
     (.submit queue #js [(.finish command-encoder)])))
 
 (defn animate [time]
-  (let [{:keys [canvas device context pipeline bind-group objects buffers canvas-format render-error-shown?]} @app-state]
+  (let [{:keys [canvas device context pipeline objects canvas-format render-error-shown?]} @app-state]
     (when device
       (try
-        (render canvas device context pipeline bind-group objects (:uniform buffers) canvas-format (/ time 1000))
+        (render canvas device context pipeline objects canvas-format (/ time 1000))
         (catch :default err
           (when-not render-error-shown?
             (swap! app-state assoc :render-error-shown? true)
             (set-status! (str "Render failed: " err) "#ff6b6b"))))
       (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))))
+
+(defn create-scene-object [^js device ^js pipeline mesh model]
+  (let [uniform-buffer (create-uniform-buffer device)
+        bind-group (create-bind-group device pipeline uniform-buffer)]
+    {:mesh mesh
+     :model model
+     :uniform-buffer uniform-buffer
+     :bind-group bind-group}))
 
 (defn request-device []
   (-> js/navigator
@@ -210,32 +215,25 @@
   (let [context (.getContext canvas "webgpu")
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
-        buffers (create-buffers device)
         mesh (create-triangle-mesh device)
-        objects [{:mesh mesh
-                  :model (create-model-matrix 0)}]
-        bind-group (create-bind-group device pipeline (:uniform buffers))]
+        objects [(create-scene-object device pipeline mesh (create-model-matrix 0))]]
     {:context context
      :canvas-format format
      :pipeline pipeline
-     :buffers buffers
-     :objects objects
-     :bind-group bind-group}))
+     :objects objects}))
 
 (defn initialize-rendering! [^js device vertex-code fragment-code]
   (swap! app-state assoc :device device)
   (setup-device-error-handler! device)
   (let [canvas (:canvas @app-state)
-        {:keys [context canvas-format pipeline buffers objects bind-group]}
+        {:keys [context canvas-format pipeline objects]}
         (create-render-resources canvas device vertex-code fragment-code)]
     (configure-canvas! context device canvas-format)
     (swap! app-state assoc
            :context context
            :canvas-format canvas-format
            :pipeline pipeline
-           :buffers buffers
            :objects objects
-           :bind-group bind-group
            :render-error-shown? false)
     (set-status! "Rendering with WebGPU" "#51cf66")
     (start-animation!)))
