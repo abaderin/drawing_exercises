@@ -58,13 +58,9 @@
         :depthWriteEnabled true
         :depthCompare "less"}})))
 
-(defn create-floor-mesh [^js device]
-  (let [vertex-data (js/Float32Array. #js [-1.5 0.0 -1.5 0.65 0.65 0.65 1.0
-                                           1.5 0.0 -1.5 0.65 0.65 0.65 1.0
-                                           1.5 0.0 1.5 0.65 0.65 0.65 1.0
-                                           -1.5 0.0 1.5 0.65 0.65 0.65 1.0])
-        index-data (js/Uint32Array. #js [0 1 2
-                                          0 2 3])
+(defn create-mesh [^js device vertices indices]
+  (let [vertex-data (js/Float32Array. vertices)
+        index-data (js/Uint32Array. indices)
         vertex-buffer (.createBuffer device #js {:size (.-byteLength vertex-data)
                                                  :usage (bit-or (.-VERTEX js/GPUBufferUsage)
                                                                 (.-COPY_DST js/GPUBufferUsage))})
@@ -76,7 +72,72 @@
     (.writeBuffer queue index-buffer 0 index-data)
     {:vertex-buffer vertex-buffer
      :index-buffer index-buffer
-     :index-count 6}))
+     :index-count (.-length index-data)}))
+
+(defn create-floor-mesh [^js device]
+  (create-mesh device
+               #js [-1.5 0.0 -1.5 0.65 0.65 0.65 1.0
+                    1.5 0.0 -1.5 0.65 0.65 0.65 1.0
+                    1.5 0.0 1.5 0.65 0.65 0.65 1.0
+                    -1.5 0.0 1.5 0.65 0.65 0.65 1.0]
+               #js [0 1 2
+                    0 2 3]))
+
+(defn create-back-wall-mesh [^js device]
+  (create-mesh device
+               #js [-1.5 0.0 -1.5 0.78 0.78 0.76 1.0
+                    1.5 0.0 -1.5 0.78 0.78 0.76 1.0
+                    1.5 2.0 -1.5 0.78 0.78 0.76 1.0
+                    -1.5 2.0 -1.5 0.78 0.78 0.76 1.0]
+               #js [0 1 2
+                    0 2 3]))
+
+(defn create-left-wall-mesh [^js device]
+  (create-mesh device
+               #js [-1.5 0.0 1.5 0.72 0.72 0.70 1.0
+                    -1.5 0.0 -1.5 0.72 0.72 0.70 1.0
+                    -1.5 2.0 -1.5 0.72 0.72 0.70 1.0
+                    -1.5 2.0 1.5 0.72 0.72 0.70 1.0]
+               #js [0 1 2
+                    0 2 3]))
+
+(defn create-cube-mesh [^js device]
+  (create-mesh device
+               #js [-1.0 0.0 -0.5 0.86 0.58 0.36 1.0
+                    -0.5 0.0 -0.5 0.86 0.58 0.36 1.0
+                    -0.5 0.5 -0.5 0.86 0.58 0.36 1.0
+                    -1.0 0.5 -0.5 0.86 0.58 0.36 1.0
+
+                    -0.5 0.0 -1.0 0.74 0.48 0.30 1.0
+                    -1.0 0.0 -1.0 0.74 0.48 0.30 1.0
+                    -1.0 0.5 -1.0 0.74 0.48 0.30 1.0
+                    -0.5 0.5 -1.0 0.74 0.48 0.30 1.0
+
+                    -0.5 0.0 -0.5 0.80 0.52 0.32 1.0
+                    -0.5 0.0 -1.0 0.80 0.52 0.32 1.0
+                    -0.5 0.5 -1.0 0.80 0.52 0.32 1.0
+                    -0.5 0.5 -0.5 0.80 0.52 0.32 1.0
+
+                    -1.0 0.0 -1.0 0.68 0.42 0.26 1.0
+                    -1.0 0.0 -0.5 0.68 0.42 0.26 1.0
+                    -1.0 0.5 -0.5 0.68 0.42 0.26 1.0
+                    -1.0 0.5 -1.0 0.68 0.42 0.26 1.0
+
+                    -1.0 0.5 -0.5 0.92 0.66 0.42 1.0
+                    -0.5 0.5 -0.5 0.92 0.66 0.42 1.0
+                    -0.5 0.5 -1.0 0.92 0.66 0.42 1.0
+                    -1.0 0.5 -1.0 0.92 0.66 0.42 1.0
+
+                    -1.0 0.0 -1.0 0.58 0.34 0.22 1.0
+                    -0.5 0.0 -1.0 0.58 0.34 0.22 1.0
+                    -0.5 0.0 -0.5 0.58 0.34 0.22 1.0
+                    -1.0 0.0 -0.5 0.58 0.34 0.22 1.0]
+               #js [0 1 2 0 2 3
+                    4 5 6 4 6 7
+                    8 9 10 8 10 11
+                    12 13 14 12 14 15
+                    16 17 18 16 18 19
+                    20 21 22 20 22 23]))
 
 (defn create-uniform-buffer [^js device]
   (.createBuffer device #js
@@ -218,7 +279,14 @@
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
         floor-mesh (create-floor-mesh device)
-        objects [(create-scene-object device pipeline floor-mesh (.identity mat4))]]
+        back-wall-mesh (create-back-wall-mesh device)
+        left-wall-mesh (create-left-wall-mesh device)
+        cube-mesh (create-cube-mesh device)
+        identity (.identity mat4)
+        objects [(create-scene-object device pipeline floor-mesh identity)
+                 (create-scene-object device pipeline back-wall-mesh identity)
+                 (create-scene-object device pipeline left-wall-mesh identity)
+                 (create-scene-object device pipeline cube-mesh identity)]]
     {:context context
      :canvas-format format
      :pipeline pipeline
