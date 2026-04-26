@@ -6,6 +6,7 @@
          :context nil
          :pipeline nil
          :buffers nil
+         :mesh nil
          :bind-group nil
          :animation-id nil
          :canvas-format nil
@@ -34,13 +35,31 @@
       {:layout "auto"
        :vertex #js
        {:module shader-module
-        :entryPoint "vs_main"}
+        :entryPoint "vs_main"
+        :buffers #js [#js {:arrayStride 24
+                           :attributes #js [#js {:shaderLocation 0
+                                                  :offset 0
+                                                  :format "float32x2"}
+                                             #js {:shaderLocation 1
+                                                  :offset 8
+                                                  :format "float32x4"}]}]}
        :fragment #js
        {:module shader-module-frag
         :entryPoint "fs_main"
         :targets #js [#js {:format format}]}
        :primitive #js
        {:topology "triangle-list"}})))
+
+(defn create-triangle-mesh [^js device]
+  (let [vertex-data (js/Float32Array. #js [0.0 0.8 1.0 0.2 0.2 1.0
+                                           -0.8 -0.8 0.2 1.0 0.2 1.0
+                                           0.8 -0.8 0.2 0.2 1.0 1.0])
+        vertex-buffer (.createBuffer device #js {:size (.-byteLength vertex-data)
+                                                 :usage (bit-or (.-VERTEX js/GPUBufferUsage)
+                                                                (.-COPY_DST js/GPUBufferUsage))})]
+    (.writeBuffer (.-queue device) vertex-buffer 0 vertex-data)
+    {:vertex-buffer vertex-buffer
+     :vertex-count 3}))
 
 (defn create-buffers [^js device]
   (let [uniform-buffer (.createBuffer device #js
@@ -69,7 +88,7 @@
     {:width width
      :height height}))
 
-(defn render [canvas ^js device ^js context pipeline bind-group uniform-buffer canvas-format time]
+(defn render [canvas ^js device ^js context pipeline bind-group mesh uniform-buffer canvas-format time]
   (let [_ (resize-canvas canvas device context canvas-format)
         time-data (js/Float32Array. #js [time 0 0 0])
         command-encoder (.createCommandEncoder device)
@@ -85,15 +104,16 @@
     (.writeBuffer queue uniform-buffer 0 time-data)
     (.setPipeline render-pass pipeline)
     (.setBindGroup render-pass 0 bind-group)
-    (.draw render-pass 3)
+    (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
+    (.draw render-pass (:vertex-count mesh))
     (.end render-pass)
     (.submit queue #js [(.finish command-encoder)])))
 
 (defn animate [time]
-  (let [{:keys [canvas device context pipeline bind-group buffers canvas-format render-error-shown?]} @app-state]
+  (let [{:keys [canvas device context pipeline bind-group mesh buffers canvas-format render-error-shown?]} @app-state]
     (when device
       (try
-        (render canvas device context pipeline bind-group (:uniform buffers) canvas-format (/ time 1000))
+        (render canvas device context pipeline bind-group mesh (:uniform buffers) canvas-format (/ time 1000))
         (catch :default err
           (when-not render-error-shown?
             (swap! app-state assoc :render-error-shown? true)
@@ -127,18 +147,20 @@
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
         buffers (create-buffers device)
+        mesh (create-triangle-mesh device)
         bind-group (create-bind-group device pipeline (:uniform buffers))]
     {:context context
      :canvas-format format
      :pipeline pipeline
      :buffers buffers
+     :mesh mesh
      :bind-group bind-group}))
 
 (defn initialize-rendering! [^js device vertex-code fragment-code]
   (swap! app-state assoc :device device)
   (setup-device-error-handler! device)
   (let [canvas (:canvas @app-state)
-        {:keys [context canvas-format pipeline buffers bind-group]}
+        {:keys [context canvas-format pipeline buffers mesh bind-group]}
         (create-render-resources canvas device vertex-code fragment-code)]
     (configure-canvas! context device canvas-format)
     (swap! app-state assoc
@@ -146,6 +168,7 @@
            :canvas-format canvas-format
            :pipeline pipeline
            :buffers buffers
+           :mesh mesh
            :bind-group bind-group
            :render-error-shown? false)
     (set-status! "Rendering with WebGPU" "#51cf66")
