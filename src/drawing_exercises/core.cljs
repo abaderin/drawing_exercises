@@ -1,4 +1,5 @@
-(ns drawing-exercises.core)
+(ns drawing-exercises.core
+  (:require ["wgpu-matrix" :refer [mat4]]))
 
 (defonce app-state
   (atom {:canvas nil
@@ -15,6 +16,7 @@
          :render-error-shown? false}))
 
 (def depth-format "depth24plus")
+(def uniform-buffer-byte-size 80)
 
 (defn load-shader [path]
   (-> (js/fetch path)
@@ -78,7 +80,7 @@
 
 (defn create-buffers [^js device]
   (let [uniform-buffer (.createBuffer device #js
-                         {:size 16
+                         {:size uniform-buffer-byte-size
                           :usage (bit-or (.-UNIFORM js/GPUBufferUsage)
                                          (.-COPY_DST js/GPUBufferUsage))
                           :mappedAtCreation false})]
@@ -120,9 +122,22 @@
     {:width width
      :height height}))
 
+(defn create-view-projection-matrix [width height]
+  (let [aspect (/ width height)
+        projection (.perspective mat4 (/ (.-PI js/Math) 4) aspect 0.1 100.0)
+        view (.lookAt mat4 #js [0.0 0.0 3.0] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
+    (.multiply mat4 projection view)))
+
+(defn create-frame-uniforms [width height time]
+  (let [view-projection (create-view-projection-matrix width height)
+        uniforms (js/Float32Array. 20)]
+    (.set uniforms view-projection 0)
+    (aset uniforms 16 time)
+    uniforms))
+
 (defn render [canvas ^js device ^js context pipeline bind-group mesh uniform-buffer canvas-format time]
   (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
-        time-data (js/Float32Array. #js [time 0 0 0])
+        frame-uniforms (create-frame-uniforms width height time)
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
         texture-view (.createView texture)
@@ -140,7 +155,7 @@
                          :depthLoadOp "clear"
                          :depthStoreOp "store"}})
         queue (.-queue device)]
-    (.writeBuffer queue uniform-buffer 0 time-data)
+    (.writeBuffer queue uniform-buffer 0 frame-uniforms)
     (.setPipeline render-pass pipeline)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))

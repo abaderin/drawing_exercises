@@ -4,6 +4,7 @@ struct VertexOutput {
 }
 
 struct Uniforms {
+  view_projection : mat4x4<f32>,
   time : vec4<f32>,
 }
 
@@ -20,7 +21,8 @@ fn vs_main(
   let rotated = vec2<f32>(position.x * c - position.y * s, position.x * s + position.y * c);
 
   var output : VertexOutput;
-  output.position = vec4<f32>(rotated, position.z, 1.0);
+  let world_position = vec4<f32>(rotated, position.z, 1.0);
+  output.position = uniforms.view_projection * world_position;
   output.color = color;
   return output;
 }
