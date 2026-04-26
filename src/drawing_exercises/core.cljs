@@ -58,11 +58,13 @@
         :depthWriteEnabled true
         :depthCompare "less"}})))
 
-(defn create-triangle-mesh [^js device]
-  (let [vertex-data (js/Float32Array. #js [0.0 0.8 0.0 1.0 0.2 0.2 1.0
-                                           -0.8 -0.8 0.0 0.2 1.0 0.2 1.0
-                                           0.8 -0.8 0.0 0.2 0.2 1.0 1.0])
-        index-data (js/Uint32Array. #js [0 1 2])
+(defn create-floor-mesh [^js device]
+  (let [vertex-data (js/Float32Array. #js [-1.5 0.0 -1.5 0.65 0.65 0.65 1.0
+                                           1.5 0.0 -1.5 0.65 0.65 0.65 1.0
+                                           1.5 0.0 1.5 0.65 0.65 0.65 1.0
+                                           -1.5 0.0 1.5 0.65 0.65 0.65 1.0])
+        index-data (js/Uint32Array. #js [0 1 2
+                                          0 2 3])
         vertex-buffer (.createBuffer device #js {:size (.-byteLength vertex-data)
                                                  :usage (bit-or (.-VERTEX js/GPUBufferUsage)
                                                                 (.-COPY_DST js/GPUBufferUsage))})
@@ -74,7 +76,7 @@
     (.writeBuffer queue index-buffer 0 index-data)
     {:vertex-buffer vertex-buffer
      :index-buffer index-buffer
-     :index-count 3}))
+     :index-count 6}))
 
 (defn create-uniform-buffer [^js device]
   (.createBuffer device #js
@@ -122,7 +124,7 @@
 (defn create-view-projection-matrix [width height]
   (let [aspect (/ width height)
         projection (.perspective mat4 (/ (.-PI js/Math) 4) aspect 0.1 100.0)
-        view (.lookAt mat4 #js [0.0 0.0 3.0] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
+        view (.lookAt mat4 #js [0.0 2.0 4.0] #js [0.0 0.0 0.0] #js [0.0 1.0 0.0])]
     (.multiply mat4 projection view)))
 
 (defn create-model-matrix [time]
@@ -215,8 +217,8 @@
   (let [context (.getContext canvas "webgpu")
         format (.getPreferredCanvasFormat (.-gpu js/navigator))
         pipeline (create-pipeline device format vertex-code fragment-code)
-        mesh (create-triangle-mesh device)
-        objects [(create-scene-object device pipeline mesh (create-model-matrix 0))]]
+        floor-mesh (create-floor-mesh device)
+        objects [(create-scene-object device pipeline floor-mesh (.identity mat4))]]
     {:context context
      :canvas-format format
      :pipeline pipeline
