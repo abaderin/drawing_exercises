@@ -54,12 +54,19 @@
   (let [vertex-data (js/Float32Array. #js [0.0 0.8 1.0 0.2 0.2 1.0
                                            -0.8 -0.8 0.2 1.0 0.2 1.0
                                            0.8 -0.8 0.2 0.2 1.0 1.0])
+        index-data (js/Uint32Array. #js [0 1 2])
         vertex-buffer (.createBuffer device #js {:size (.-byteLength vertex-data)
                                                  :usage (bit-or (.-VERTEX js/GPUBufferUsage)
-                                                                (.-COPY_DST js/GPUBufferUsage))})]
-    (.writeBuffer (.-queue device) vertex-buffer 0 vertex-data)
+                                                                (.-COPY_DST js/GPUBufferUsage))})
+        index-buffer (.createBuffer device #js {:size (.-byteLength index-data)
+                                                :usage (bit-or (.-INDEX js/GPUBufferUsage)
+                                                               (.-COPY_DST js/GPUBufferUsage))})
+        queue (.-queue device)]
+    (.writeBuffer queue vertex-buffer 0 vertex-data)
+    (.writeBuffer queue index-buffer 0 index-data)
     {:vertex-buffer vertex-buffer
-     :vertex-count 3}))
+     :index-buffer index-buffer
+     :index-count 3}))
 
 (defn create-buffers [^js device]
   (let [uniform-buffer (.createBuffer device #js
@@ -105,7 +112,8 @@
     (.setPipeline render-pass pipeline)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
-    (.draw render-pass (:vertex-count mesh))
+    (.setIndexBuffer render-pass (:index-buffer mesh) "uint32")
+    (.drawIndexed render-pass (:index-count mesh))
     (.end render-pass)
     (.submit queue #js [(.finish command-encoder)])))
 
