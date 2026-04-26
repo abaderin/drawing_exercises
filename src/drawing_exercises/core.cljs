@@ -7,10 +7,14 @@
          :pipeline nil
          :buffers nil
          :mesh nil
+         :depth-texture nil
+         :depth-size nil
          :bind-group nil
          :animation-id nil
          :canvas-format nil
          :render-error-shown? false}))
+
+(def depth-format "depth24plus")
 
 (defn load-shader [path]
   (-> (js/fetch path)
@@ -48,7 +52,11 @@
         :entryPoint "fs_main"
         :targets #js [#js {:format format}]}
        :primitive #js
-       {:topology "triangle-list"}})))
+       {:topology "triangle-list"}
+       :depthStencil #js
+       {:format depth-format
+        :depthWriteEnabled true
+        :depthCompare "less"}})))
 
 (defn create-triangle-mesh [^js device]
   (let [vertex-data (js/Float32Array. #js [0.0 0.8 0.0 1.0 0.2 0.2 1.0
@@ -82,6 +90,23 @@
      :entries #js [#js {:binding 0
                         :resource #js {:buffer uniform-buffer}}]}))
 
+(defn create-depth-texture [^js device width height]
+  (.createTexture device #js
+    {:size #js [width height]
+     :format depth-format
+     :usage (.-RENDER_ATTACHMENT js/GPUTextureUsage)}))
+
+(defn ^js ensure-depth-texture! [device width height]
+  (let [depth-size [width height]
+        {:keys [depth-texture]} @app-state]
+    (if (= depth-size (:depth-size @app-state))
+      depth-texture
+      (let [depth-texture (create-depth-texture device width height)]
+        (swap! app-state assoc
+               :depth-texture depth-texture
+               :depth-size depth-size)
+        depth-texture))))
+
 (defn resize-canvas [^js canvas device context canvas-format]
   (let [client-width (.-clientWidth canvas)
         client-height (.-clientHeight canvas)
@@ -96,17 +121,24 @@
      :height height}))
 
 (defn render [canvas ^js device ^js context pipeline bind-group mesh uniform-buffer canvas-format time]
-  (let [_ (resize-canvas canvas device context canvas-format)
+  (let [{:keys [width height]} (resize-canvas canvas device context canvas-format)
         time-data (js/Float32Array. #js [time 0 0 0])
         command-encoder (.createCommandEncoder device)
         texture (.getCurrentTexture context)
         texture-view (.createView texture)
+        depth-texture (ensure-depth-texture! device width height)
+        depth-view (.createView depth-texture)
         render-pass (.beginRenderPass command-encoder #js
                        {:colorAttachments #js [#js
                                                {:view texture-view
                                                 :clearValue #js {:r 0.1 :g 0.1 :b 0.1 :a 1.0}
                                                 :loadOp "clear"
-                                                :storeOp "store"}]})
+                                                :storeOp "store"}]
+                        :depthStencilAttachment #js
+                        {:view depth-view
+                         :depthClearValue 1.0
+                         :depthLoadOp "clear"
+                         :depthStoreOp "store"}})
         queue (.-queue device)]
     (.writeBuffer queue uniform-buffer 0 time-data)
     (.setPipeline render-pass pipeline)
