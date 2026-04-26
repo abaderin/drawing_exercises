@@ -167,6 +167,44 @@
                     16 17 18 16 18 19
                     20 21 22 20 22 23]))
 
+(defn create-light-marker-mesh [^js device]
+  (create-mesh device
+               #js [-0.025 -0.025 0.025 0.0 0.0 1.0 1.0 0.92 0.1 1.0
+                    0.025 -0.025 0.025 0.0 0.0 1.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 0.025 0.0 0.0 1.0 1.0 0.92 0.1 1.0
+                    -0.025 0.025 0.025 0.0 0.0 1.0 1.0 0.92 0.1 1.0
+
+                    0.025 -0.025 -0.025 0.0 0.0 -1.0 1.0 0.92 0.1 1.0
+                    -0.025 -0.025 -0.025 0.0 0.0 -1.0 1.0 0.92 0.1 1.0
+                    -0.025 0.025 -0.025 0.0 0.0 -1.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 -0.025 0.0 0.0 -1.0 1.0 0.92 0.1 1.0
+
+                    0.025 -0.025 0.025 1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 -0.025 -0.025 1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 -0.025 1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 0.025 1.0 0.0 0.0 1.0 0.92 0.1 1.0
+
+                    -0.025 -0.025 -0.025 -1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    -0.025 -0.025 0.025 -1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    -0.025 0.025 0.025 -1.0 0.0 0.0 1.0 0.92 0.1 1.0
+                    -0.025 0.025 -0.025 -1.0 0.0 0.0 1.0 0.92 0.1 1.0
+
+                    -0.025 0.025 0.025 0.0 1.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 0.025 0.0 1.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 0.025 -0.025 0.0 1.0 0.0 1.0 0.92 0.1 1.0
+                    -0.025 0.025 -0.025 0.0 1.0 0.0 1.0 0.92 0.1 1.0
+
+                    -0.025 -0.025 -0.025 0.0 -1.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 -0.025 -0.025 0.0 -1.0 0.0 1.0 0.92 0.1 1.0
+                    0.025 -0.025 0.025 0.0 -1.0 0.0 1.0 0.92 0.1 1.0
+                    -0.025 -0.025 0.025 0.0 -1.0 0.0 1.0 0.92 0.1 1.0]
+               #js [0 1 2 0 2 3
+                    4 5 6 4 6 7
+                    8 9 10 8 10 11
+                    12 13 14 12 14 15
+                    16 17 18 16 18 19
+                    20 21 22 20 22 23]))
+
 (defn create-uniform-buffer [^js device]
   (.createBuffer device #js
     {:size uniform-buffer-byte-size
@@ -235,9 +273,16 @@
     (aset uniforms 39 light-intensity)
     uniforms))
 
+(defn marker-model-matrix [light-position]
+  (let [[x y z] light-position]
+    (create-translation-matrix x y z)))
+
 (defn draw-object! [^js render-pass ^js queue width height object time light-position light-intensity]
-  (let [{:keys [mesh model uniform-buffer bind-group]} object
-        frame-uniforms (create-frame-uniforms width height model time light-position light-intensity)]
+  (let [{:keys [mesh model uniform-buffer bind-group follows-light?]} object
+        effective-model (if follows-light?
+                          (marker-model-matrix light-position)
+                          model)
+        frame-uniforms (create-frame-uniforms width height effective-model time light-position light-intensity)]
     (.writeBuffer queue uniform-buffer 0 frame-uniforms)
     (.setBindGroup render-pass 0 bind-group)
     (.setVertexBuffer render-pass 0 (:vertex-buffer mesh))
@@ -280,13 +325,17 @@
             (set-status! (str "Render failed: " err) "#ff6b6b"))))
       (swap! app-state assoc :animation-id (js/requestAnimationFrame animate)))))
 
-(defn create-scene-object [^js device ^js pipeline mesh model]
-  (let [uniform-buffer (create-uniform-buffer device)
-        bind-group (create-bind-group device pipeline uniform-buffer)]
-    {:mesh mesh
-     :model model
-     :uniform-buffer uniform-buffer
-     :bind-group bind-group}))
+(defn create-scene-object
+  ([^js device ^js pipeline mesh model]
+   (create-scene-object device pipeline mesh model nil))
+  ([^js device ^js pipeline mesh model opts]
+   (let [uniform-buffer (create-uniform-buffer device)
+         bind-group (create-bind-group device pipeline uniform-buffer)]
+     (merge {:mesh mesh
+             :model model
+             :uniform-buffer uniform-buffer
+             :bind-group bind-group}
+            opts))))
 
 (defn request-device []
   (-> js/navigator
@@ -318,12 +367,15 @@
         back-wall-mesh (create-back-wall-mesh device)
         left-wall-mesh (create-left-wall-mesh device)
         cube-mesh (create-cube-mesh device)
+        light-marker-mesh (create-light-marker-mesh device)
         identity (.identity mat4)
         cube-model (create-translation-matrix -0.75 0.25 -0.75)
+        light-marker-model (marker-model-matrix (:light-position @app-state))
         objects [(create-scene-object device pipeline floor-mesh identity)
                  (create-scene-object device pipeline back-wall-mesh identity)
                  (create-scene-object device pipeline left-wall-mesh identity)
-                 (create-scene-object device pipeline cube-mesh cube-model)]]
+                 (create-scene-object device pipeline cube-mesh cube-model)
+                 (create-scene-object device pipeline light-marker-mesh light-marker-model {:follows-light? true})]]
     {:context context
      :canvas-format format
      :pipeline pipeline
