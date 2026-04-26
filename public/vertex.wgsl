@@ -1,6 +1,7 @@
 struct VertexOutput {
   @builtin(position) position : vec4<f32>,
   @location(0) color : vec4<f32>,
+  @location(1) normal : vec3<f32>,
 }
 
 struct Uniforms {
@@ -19,7 +20,9 @@ fn vs_main(
 ) -> VertexOutput {
   var output : VertexOutput;
   let world_position = uniforms.model * vec4<f32>(position, 1.0);
+  let world_normal = normalize((uniforms.model * vec4<f32>(normal, 0.0)).xyz);
   output.position = uniforms.view_projection * world_position;
   output.color = color;
+  output.normal = world_normal;
   return output;
 }
