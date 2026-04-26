@@ -1,0 +1,687 @@
+#+TITLE: Drawing Exercises — план работ
+#+AUTHOR: Anton
+#+STARTUP: overview
+#+TODO: TODO IN-PROGRESS | DONE CANCELED
+
+Список задач для постепенного развития приложения. Каждая задача
+рассчитана так, чтобы её можно было реализовать в пределах ~100 строк
+кода (исключения помечены явно). Описание задано в формате, удобном
+для делегирования модели-исполнителю: цель, файлы, ключевые
+подсказки, критерий приёмки.
+
+* Этап 1. Подсветка, тени и каркас сцены
+
+** TODO 1.1 Визуальный маркер источника света
+   :PROPERTIES:
+   :LOC: ~60
+   :END:
+
+   Цель: видеть в сцене, где сейчас находится источник света.
+
+   Файлы: =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - Сгенерировать маленький меш-маркер: кубик стороной 0.05 либо
+     low-poly сфера (≤ 32 треугольника). Цвет — насыщенно-жёлтый.
+   - Создать отдельный scene-object для маркера; его =model=
+     обновляется каждый кадр из =:light-position= (через
+     =mat4.translation=).
+   - Маркер пока рисуется тем же пайплайном — он будет светлым из-за
+     ambient + diffuse, этого достаточно. «Эмиссивный» режим без
+     освещения — отдельная задача (см. этап 2.10).
+
+   Приёмка: при движении слайдеров =light-x/y/z= маркер визуально
+   следует за позицией света.
+
+** TODO 1.2 Shadow mapping для теней от куба
+   Подход — классический shadow map в один проход: первый pass
+   рендерит сцену в depth-only текстуру из позиции света, второй
+   pass — обычный, но фрагментный шейдер сэмплирует shadow map.
+
+*** TODO 1.2.1 Depth-only пайплайн и shadow map текстура
+    :PROPERTIES:
+    :LOC: ~100
+    :END:
+
+    Цель: иметь подготовленный depth-only render pass из позиции
+    света. Результат на этом шаге ещё не используется в фрагментном
+    шейдере основного пайплайна — только подготовка.
+
+    Файлы: =src/drawing_exercises/core.cljs=, новый файл
+    =public/shadow.wgsl= (только =vs_main= с light view-projection,
+    без fragment-стадии).
+
+    Реализация:
+    - Создать =shadow-map-texture=, формат =depth32float=, размер
+      1024×1024, =usage = TEXTURE_BINDING | RENDER_ATTACHMENT=. Хранить
+      в app-state.
+    - Создать =shadow-pipeline= с тем же vertex layout (40 байт), без
+      fragment-стадии (или с пустым), =depthStencil= на =depth32float=.
+    - Создать uniform-буфер для =light_view_projection= (mat4, 64 байта)
+      и bind group.
+    - View-projection света: =mat4.ortho= (например, [-2, 2, -2, 2,
+      0.1, 10]) + =mat4.lookAt= из =:light-position= в [0,0,0].
+    - В каждом кадре первым делом — render pass с =loadOp "clear"=,
+      =depthClearValue 1.0=, отрисовать все объекты сцены этим
+      пайплайном.
+
+    Приёмка: кадр рендерится без ошибок валидации; в shadow map
+    действительно записаны глубины (для проверки можно временно
+    забиндить её как color через debug-шейдер).
+
+*** TODO 1.2.2 Передача shadow map в основной пайплайн
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: shadow map и матрица света должны быть видимы из
+    фрагментного шейдера основного пайплайна.
+
+    Файлы: =src/drawing_exercises/core.cljs=, =public/fragment.wgsl=.
+
+    Реализация:
+    - Расширить bind group layout основного пайплайна: добавить
+      =texture_depth_2d= на binding 1 и =sampler_comparison= на
+      binding 2.
+    - В =Uniforms= шейдера добавить =light_view_projection : mat4x4<f32>=.
+      Соответственно увеличить =uniform-buffer-byte-size= и заполнение
+      в =create-frame-uniforms=.
+    - При создании bind group для каждого scene-object'а передавать
+      =shadow-map-texture.createView()= и общий compare-сэмплер
+      (=compare = "less"=, =magFilter "linear"=).
+
+    Приёмка: сцена рендерится без визуальных артефактов; шейдер
+    компилируется с новыми привязками; матрицу света можно
+    проверить, временно подмешав её координаты в выходной цвет.
+
+*** TODO 1.2.3 Применение shadow factor в фрагментном шейдере
+    :PROPERTIES:
+    :LOC: ~60
+    :END:
+
+    Цель: куб отбрасывает тень на пол и стены.
+
+    Файлы: =public/fragment.wgsl= (и при необходимости
+    =public/vertex.wgsl=, чтобы передать =world_position= — он уже
+    передаётся).
+
+    Реализация:
+    - В =fs_main=: =light_clip = light_view_projection *
+      vec4(world_position, 1.0)=, perspective divide, перевод XY в
+      [0,1] (=uv = light_clip.xy * 0.5 + 0.5; uv.y = 1.0 - uv.y=).
+    - =shadow = textureSampleCompare(shadow_map, shadow_sampler,
+      uv, light_clip.z - bias)=. Умножать на этот множитель только
+      diffuse-компоненту, ambient оставить.
+    - Подобрать =bias= в диапазоне 0.005…0.01, чтобы убрать
+      shadow acne.
+    - Точки вне [0,1] по uv считать освещёнными (shadow = 1.0).
+
+    Приёмка: на полу и стенах видна тень от куба, движение света
+    меняет тень, нет полосчатого acne и петер-пэн-эффекта.
+
+** TODO 1.3 Вынести геометрию в отдельный namespace
+   :PROPERTIES:
+   :LOC: ~150 (исключение — чистый перенос)
+   :END:
+
+   Цель: отделить генерацию мешей от логики рендеринга.
+
+   Файлы: новый =src/drawing_exercises/geometry.cljs=,
+   =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - Создать namespace =drawing-exercises.geometry=.
+   - Перенести: =create-mesh=, =create-floor-mesh=,
+     =create-back-wall-mesh=, =create-left-wall-mesh=,
+     =create-cube-mesh=.
+   - В =core.cljs= добавить =[drawing-exercises.geometry :as geometry]=
+     и обновить вызовы.
+
+   Приёмка: =shadow-cljs compile main= успешен; визуально сцена не
+   изменилась.
+
+** TODO 1.4 Renderer/WebGPU setup в отдельный namespace
+
+*** TODO 1.4.1 renderer.cljs: device, canvas, pipeline, шейдеры
+    :PROPERTIES:
+    :LOC: ~120 (исключение — перенос)
+    :END:
+
+    Цель: изолировать инициализацию WebGPU в отдельный namespace.
+
+    Файлы: новый =src/drawing_exercises/renderer.cljs=,
+    =src/drawing_exercises/core.cljs=.
+
+    Реализация:
+    - Перенести в =renderer.cljs=: константы =depth-format=,
+      =uniform-buffer-byte-size=; функции =load-shader=,
+      =load-shaders=, =configure-canvas!=, =resize-canvas=,
+      =create-pipeline=, =create-depth-texture=,
+      =ensure-depth-texture!=, =request-device=,
+      =setup-device-error-handler!=, =create-uniform-buffer=,
+      =create-bind-group=.
+    - =ensure-depth-texture!= переписать так, чтобы не дёргать
+      глобальный =app-state=: принимать предыдущее состояние и
+      возвращать новое (или принимать map зависимостей).
+
+    Приёмка: сборка успешна, инициализация работает, сцена
+    рендерится как раньше.
+
+*** TODO 1.4.2 renderer.cljs: render loop
+    :PROPERTIES:
+    :LOC: ~100
+    :END:
+
+    Цель: перенести цикл отрисовки.
+
+    Файлы: =src/drawing_exercises/renderer.cljs=,
+    =src/drawing_exercises/core.cljs=.
+
+    Реализация:
+    - Перенести: =create-view-projection-matrix=,
+      =create-model-matrix=, =create-translation-matrix=,
+      =create-frame-uniforms=, =draw-object!=, =render=, =animate=.
+    - =animate= получает ссылку на app-state параметром (или
+      замыкается на него явно при старте).
+
+    Приёмка: сцена рендерится как раньше; в =core.cljs= остаётся
+    только инициализация и UI bootstrap.
+
+** TODO 1.5 Scene state и helpers в отдельный namespace
+   :PROPERTIES:
+   :LOC: ~80
+   :END:
+
+   Цель: отделить «что рендерим» от «как рендерим». Сцена становится
+   данными, не кодом — это нужно для всего этапа 2 (активный
+   объект, transform controls, add/delete).
+
+   Файлы: новый =src/drawing_exercises/scene.cljs=,
+   =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - В =scene.cljs= ввести структуру сцены — вектор мап:
+     =[{:id :floor :type :floor :position [0 0 0] :rotation [0 0 0]
+        :scale [1 1 1] :color [...] :fixed? true} ...]=.
+   - Хранить в собственном атоме =scene-state= (или в общем
+     app-state, отдельным ключом =:scene=).
+   - Перенести =create-scene-object= и сборку GPU-ресурсов: на каждый
+     элемент сцены создаётся per-object uniform-буфер и bind group.
+   - Сцена «угол комнаты + куб» собирается из этих данных, а не
+     литералом в =create-render-resources=.
+
+   Приёмка: =core.cljs= не содержит литералов сцены; добавление
+   объекта = добавление мапы в вектор.
+
+** TODO 1.6 HTML: убрать «Rotating Triangle», привести шапку
+   :PROPERTIES:
+   :LOC: ~30
+   :END:
+
+   Цель: HTML соответствует смыслу проекта.
+
+   Файлы: =public/index.html=.
+
+   Реализация:
+   - Заменить =<title>= и =<h1>= с «WebGPU Rotating Triangle» на
+     что-то по смыслу: «Drawing Exercises — Light & Shadow» (или
+     иной вариант по согласованию).
+   - Цвета/типографику привести к нейтральному студийному виду
+     (фон чуть светлее, контрастный canvas).
+   - Поведение слайдеров не трогать.
+
+   Приёмка: на странице нет упоминания «треугольника».
+
+** TODO 1.7 Orbit camera: вращение сцены мышью
+
+*** TODO 1.7.1 Состояние камеры и сферические координаты
+    :PROPERTIES:
+    :LOC: ~70
+    :END:
+
+    Цель: заменить статичный =lookAt= на параметризованную камеру.
+
+    Файлы: =src/drawing_exercises/renderer.cljs= (или =scene.cljs=,
+    если решите, что камера — часть сцены).
+
+    Реализация:
+    - Состояние камеры: =azimuth= (рад), =elevation= (рад),
+      =distance= (м), =target= ([x y z]).
+    - =create-view-projection-matrix= принимает это состояние и
+      вычисляет позицию глаза:
+      =eye = target + distance * (cos(elev)*cos(azi),
+                                   sin(elev),
+                                   cos(elev)*sin(azi))=.
+    - Дефолты подобрать так, чтобы кадр совпадал с текущим
+      (=eye = [0 2 4]=, =target = [0 0 0]=).
+
+    Приёмка: визуально сцена выглядит как раньше; ручное изменение
+    значений в state меняет ракурс.
+
+*** TODO 1.7.2 Mouse drag handlers
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: ЛКМ + drag вращает сцену вокруг центра.
+
+    Файлы: =src/drawing_exercises/core.cljs= (либо новый
+    =input.cljs=).
+
+    Реализация:
+    - Навесить на canvas =mousedown=, =mousemove=, =mouseup=,
+      =mouseleave=.
+    - При зажатой ЛКМ накапливать дельту (dx, dy), обновлять
+      =azimuth -= dx * sensitivity= и =elevation -= dy * sensitivity=.
+    - Ограничивать =elevation= в пределах =(-π/2 + ε, π/2 - ε)=,
+      чтобы не было «переворота».
+
+    Приёмка: сцена плавно вращается мышью; нет рывков на смене
+    направления.
+
+** TODO 1.8 Зум камеры колесом мыши
+   :PROPERTIES:
+   :LOC: ~40
+   :END:
+
+   Цель: колесо приближает/отдаляет камеру.
+
+   Файлы: =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - Подписаться на =wheel= на canvas; в обработчике вызывать
+     =preventDefault=.
+   - =distance *= 1 + deltaY * factor= (factor ~0.001), ограничить
+     =distance ∈ [0.5, 20]=.
+
+   Приёмка: колесо вверх — приближение, вниз — отдаление; нет
+   прокрутки страницы.
+
+** TODO 1.9 Pan камеры
+   :PROPERTIES:
+   :LOC: ~80
+   :END:
+
+   Цель: перемещение target камеры в плоскости экрана.
+
+   Файлы: =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - Триггер: средняя кнопка мыши, либо Shift+ЛКМ (выбрать одно,
+     зафиксировать комментарием в коде).
+   - На drag: вычислить смещение в пикселях, перевести в world-space
+     с учётом ориентации камеры (=right = normalize(cross(forward, up))=,
+     =cam_up = normalize(cross(right, forward))=).
+   - Прибавлять к =target= (с масштабом, зависящим от =distance=,
+     чтобы pan чувствовался однородно при разном зуме).
+
+   Приёмка: pan смещает сцену в сторону drag'а; расстояние и
+   ориентация сохраняются.
+
+* Этап 2. Объекты сцены и режимы рендера
+
+** TODO 2.1 UI для позиции куба
+   :PROPERTIES:
+   :LOC: ~60
+   :END:
+
+   Цель: управлять координатами куба тремя слайдерами.
+
+   Файлы: =public/index.html=,
+   =src/drawing_exercises/scene.cljs= (после 1.5),
+   =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - В HTML три =<input type="range">=: =cube-x=, =cube-y=, =cube-z=,
+     диапазон [-1.5, 1.5], шаг 0.05.
+   - Обновлять =:position= куба в scene-state.
+   - Перед каждым кадром собирать model-матрицу из текущей позиции.
+
+   Приёмка: слайдеры двигают куб в реальном времени.
+
+** TODO 2.2 UI для размера куба
+   :PROPERTIES:
+   :LOC: ~50
+   :END:
+
+   Цель: один слайдер для равномерного масштаба куба.
+
+   Файлы: =public/index.html=, =src/drawing_exercises/scene.cljs=.
+
+   Реализация:
+   - Слайдер =cube-scale=, диапазон [0.2, 2.0], шаг 0.05.
+   - В scene-state =:scale [s s s]= для куба.
+   - Model-матрица: сначала scale, затем translation.
+
+   Приёмка: куб растёт/уменьшается; при позиции Y > scale_y * 0.25
+   стоит «на полу».
+
+** TODO 2.3 Сфера
+
+*** TODO 2.3.1 Процедурный генератор сферы
+    :PROPERTIES:
+    :LOC: ~100
+    :END:
+
+    Цель: =create-sphere-mesh=, по интерфейсу аналогична
+    cube/floor.
+
+    Файлы: =src/drawing_exercises/geometry.cljs= (после 1.3).
+
+    Реализация:
+    - Параметры: =radius=, =lat-segments= (16), =lon-segments= (32),
+      =color= ([r g b]).
+    - UV-сфера: для каждой =(lat, lon)= позиция через сферические
+      координаты, нормаль = нормированная позиция, цвет — параметр.
+    - Индексы: пары треугольников на каждый «четырёхугольник»
+      сетки.
+
+    Приёмка: возвращает структуру =mesh= того же формата, что
+    =create-cube-mesh= (=:vertex-buffer=, =:index-buffer=,
+    =:index-count=).
+
+*** TODO 2.3.2 Сфера в сцене
+    :PROPERTIES:
+    :LOC: ~30
+    :END:
+
+    Цель: поставить сферу в сцену рядом с кубом.
+
+    Файлы: =src/drawing_exercises/scene.cljs=.
+
+    Реализация:
+    - В дефолтной сцене добавить объект =:sphere= с radius 0.25,
+      position =[0.5 0.25 -0.5]=.
+
+    Приёмка: видны и куб, и сфера; сфера затенена корректно.
+
+** TODO 2.4 Цилиндр
+
+*** TODO 2.4.1 Процедурный генератор цилиндра
+    :PROPERTIES:
+    :LOC: ~120 (исключение — нужны 2 крышки + бок)
+    :END:
+
+    Цель: =create-cylinder-mesh=.
+
+    Файлы: =src/drawing_exercises/geometry.cljs=.
+
+    Реализация:
+    - Параметры: =radius=, =height=, =radial-segments= (24).
+    - Три части: верхняя крышка (треугольный веер вокруг центра),
+      нижняя крышка, боковая поверхность (кольцо четырёхугольников).
+    - Нормали: у боковой — радиальные горизонтальные =[cos θ, 0, sin θ]=;
+      у крышек — =±Y=. Дублировать вершины на стыках, чтобы нормали
+      не «склеивались» сглаживанием.
+
+    Приёмка: цилиндр выглядит правильно затенённым, без
+    «треугольных» артефактов на крышках.
+
+*** TODO 2.4.2 Цилиндр в сцене
+    :PROPERTIES:
+    :LOC: ~30
+    :END:
+
+    Аналогично 2.3.2: добавить объект цилиндра в данные сцены.
+
+** TODO 2.5 Выбор активного объекта сцены
+   :PROPERTIES:
+   :LOC: ~60
+   :END:
+
+   Цель: выпадающий список со всеми объектами сцены и состояние
+   «активного».
+
+   Файлы: =public/index.html=, =src/drawing_exercises/scene.cljs=,
+   =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - У каждого объекта в сцене должны быть =:id= и =:name=
+     («Cube 1», «Sphere 1»…).
+   - В HTML: =<select id="active-object">=, заполняется из сцены
+     при старте и при изменениях коллекции.
+   - В scene-state =:active-object-id=.
+
+   Приёмка: в выпадашке видны все объекты; смена выбора
+   обновляет состояние (визуального эффекта пока может не быть).
+
+** TODO 2.6 Transform controls для активного объекта
+
+*** TODO 2.6.1 Move (translate)
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: три слайдера X/Y/Z двигают активный объект.
+
+    Реализация:
+    - Слайдеры =active-x/y/z= обновляют =:position= активного
+      объекта.
+    - При смене активного объекта слайдеры синхронизируются с его
+      текущей позицией (записать значения в =.value=).
+
+    Приёмка: перемещение работает только для выбранного объекта.
+
+*** TODO 2.6.2 Scale
+    :PROPERTIES:
+    :LOC: ~60
+    :END:
+
+    Цель: слайдер uniform-scale + три слайдера X/Y/Z scale.
+
+    Реализация:
+    - В scene-state у объекта =:scale [sx sy sz]=.
+    - Model-матрица: =M = T * R * S=, в этом порядке.
+
+    Приёмка: масштабирование выбранного объекта работает
+    независимо.
+
+*** TODO 2.6.3 Rotate (Euler X/Y/Z)
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: три слайдера для углов поворота активного объекта.
+
+    Реализация:
+    - В scene-state =:rotation [rx ry rz]= в радианах.
+    - Сборка =R = Rz * Ry * Rx= через =mat4=.
+
+    Приёмка: поворот объекта работает; сложение поворотов
+    предсказуемо.
+
+** TODO 2.7 Добавление и удаление объектов сцены
+
+*** TODO 2.7.1 Кнопки «добавить»
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: три кнопки «+ Cube», «+ Sphere», «+ Cylinder».
+
+    Реализация:
+    - При нажатии — создать новый объект сцены с дефолтным
+      transform'ом и уникальным =:id=.
+    - Сразу делать его активным; обновить выпадашку из 2.5.
+    - GPU-буферы мешей могут быть общими между объектами одного
+      типа — создавать их один раз при инициализации, переиспользовать.
+
+    Приёмка: кнопки добавляют объект, он появляется в кадре и в
+    выпадашке.
+
+*** TODO 2.7.2 Удаление активного
+    :PROPERTIES:
+    :LOC: ~60
+    :END:
+
+    Цель: кнопка «Delete» удаляет активный объект.
+
+    Реализация:
+    - Удалять из коллекции по =:id=; вызывать
+      =uniform-buffer.destroy()= для per-object буферов
+      (bind-group destroy не имеет, GC справится).
+    - Запрещать удаление пола, стен, маркера света (флаг =:fixed?=
+      из 1.5).
+    - После удаления выбирать следующий доступный объект
+      активным.
+
+    Приёмка: удаление работает; «фиксированные» объекты не
+    удаляются.
+
+** TODO 2.8 Несколько источников света
+
+*** TODO 2.8.1 Uniform-массив и шейдер
+    :PROPERTIES:
+    :LOC: ~100
+    :END:
+
+    Цель: поддержать до 4 источников в фрагментном шейдере.
+
+    Файлы: =public/fragment.wgsl=,
+    =src/drawing_exercises/renderer.cljs=.
+
+    Реализация:
+    - В шейдере: =struct Light { position : vec4<f32> }= (xyz +
+      intensity в w).
+    - В =Uniforms=: =lights : array<Light, 4>=, =light_count : u32=
+      (плюс паддинг до 16-байтового выравнивания).
+    - В =fs_main=: цикл =for (var i: u32 = 0u; i < light_count; i++)=
+      с накоплением diffuse.
+    - Размер uniform-буфера и заполнение в =create-frame-uniforms=
+      обновить.
+
+    Приёмка: при =light_count = 1= результат идентичен
+    предыдущему; при увеличении — освещение от нескольких
+    источников.
+
+*** TODO 2.8.2 Состояние сцены: вектор источников
+    :PROPERTIES:
+    :LOC: ~60
+    :END:
+
+    Цель: заменить одиночные =:light-position=, =:light-intensity=
+    на коллекцию.
+
+    Реализация:
+    - В scene-state =:lights [{:id ... :position [...] :intensity ...} ...]=.
+    - Default — один источник, идентичный текущему.
+    - =sync-light-from-controls!= обновляет активный источник
+      (см. 2.9).
+
+    Приёмка: визуально на дефолте никаких изменений.
+
+*** TODO 2.8.3 Кнопка «добавить источник»
+    :PROPERTIES:
+    :LOC: ~60
+    :END:
+
+    Цель: можно создавать дополнительные источники (до 4).
+
+    Реализация:
+    - Кнопка «+ Light» добавляет новый источник со сдвинутой
+      позицией.
+    - При лимите кнопка дизаблится.
+    - Дополнительно: кнопка «− Light» удаляет выбранный (минимум
+      один должен оставаться).
+
+    Приёмка: можно собрать сцену с 2–3 источниками.
+
+** TODO 2.9 UI для выбора активного источника света
+   :PROPERTIES:
+   :LOC: ~80
+   :END:
+
+   Цель: слайдеры света управляют выбранным источником.
+
+   Файлы: =public/index.html=, =src/drawing_exercises/core.cljs=.
+
+   Реализация:
+   - =<select id="active-light">= рядом со слайдерами.
+   - При смене активного света значения слайдеров подтягиваются
+     из этого источника.
+   - Желательно: визуально выделить активный маркер света
+     (другим цветом, см. 1.1).
+
+   Приёмка: можно поочерёдно настраивать положения нескольких
+   источников.
+
+** TODO 2.10 Режимы отображения
+
+*** TODO 2.10.1 Состояние режима и uniform
+    :PROPERTIES:
+    :LOC: ~50
+    :END:
+
+    Цель: enum-состояние режима + проброс в шейдер + UI-селектор.
+
+    Файлы: =public/fragment.wgsl=,
+    =src/drawing_exercises/renderer.cljs=, =public/index.html=.
+
+    Реализация:
+    - В UI: =<select id="display-mode">= с опциями =solid=, =value=,
+      =normals= (=wireframe= добавим в 2.10.4).
+    - В scene/render-state =:display-mode= (keyword).
+    - В =Uniforms= шейдера: =display_mode : u32=.
+    - В =fs_main=: =switch (display_mode) { case 0u: { ... текущий
+      код ... } default: { ... } }=.
+
+    Приёмка: селектор переключается; в режиме =solid= поведение
+    как раньше.
+
+*** TODO 2.10.2 Value study (тон без цвета)
+    :PROPERTIES:
+    :LOC: ~30
+    :END:
+
+    Цель: режим, выводящий только тон — как этюд на «значения».
+
+    Файлы: =public/fragment.wgsl=.
+
+    Реализация:
+    - При =display_mode == 1u=: =value = ambient + diffuse * intensity=
+      (без умножения на базовый цвет), вернуть
+      =vec4(value, value, value, 1.0)=.
+
+    Приёмка: сцена в градациях серого; форма читается за счёт
+    света, не цвета.
+
+*** TODO 2.10.3 Debug normals (нормали как RGB)
+    :PROPERTIES:
+    :LOC: ~30
+    :END:
+
+    Цель: визуальная отладка нормалей.
+
+    Файлы: =public/fragment.wgsl=.
+
+    Реализация:
+    - При =display_mode == 2u= возвращать
+      =vec4(normalize(normal) * 0.5 + 0.5, 1.0)=.
+
+    Приёмка: поверхности окрашены по направлению нормалей,
+    освещение игнорируется.
+
+*** TODO 2.10.4 Wireframe (каркас)
+    :PROPERTIES:
+    :LOC: ~80
+    :END:
+
+    Цель: каркасный режим. WebGPU не поддерживает polygon-mode,
+    нужен отдельный пайплайн с =topology "line-list"= и индексами
+    рёбер.
+
+    Файлы: =src/drawing_exercises/geometry.cljs=,
+    =src/drawing_exercises/renderer.cljs=, =public/fragment.wgsl=
+    (или отдельный wireframe-шейдер).
+
+    Реализация:
+    - Утилита =triangle-indices→line-indices=: на каждые три
+      индекса треугольника даёт три пары линий (с дедупликацией
+      рёбер по желанию).
+    - На каждый меш дополнительно создавать =line-index-buffer=.
+    - Отдельный =wireframe-pipeline=: =topology "line-list"=,
+      fragment возвращает константу (например =vec4(0.9, 0.9, 0.9, 1.0)=).
+    - В режиме =wireframe= добавить пункт в селектор и рисовать
+      этим пайплайном.
+
+    Приёмка: все объекты сцены отображаются проволочными.
