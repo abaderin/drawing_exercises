@@ -1,25 +1,14 @@
 {:source-paths ["src" "test"]
- :dev {:compiler-options {:output-feature-set :es-next}}
- :nrepl {:port 7002 :host "0.0.0.0"}
- :builds
- {:main
-  {:target :browser
-   :output-dir "public/js"
-   :asset-path "/js"
-   :modules
-   {:main
-    {:entries [drawing-exercises.core]}}
-   :devtools
-   {:http-root "public"
-    :http-port 7000
-    :http-host "0.0.0.0"
-    :ws-port 7001
-    :ws-host "0.0.0.0"}
-   :compiler-options
-   {:output-wrapper false}}
+ :deps true
+ :nrepl {:port 3002
+         :middleware [cider.nrepl/cider-middleware
+                      cider.piggieback/wrap-cljs-repl]}
+ :builds {:main {:target :browser
+                 :output-dir "public/js"
+                 :asset-path "/js"
+                 :modules {:main {:entries [drawing-exercises.core]
+                                  :init-fn drawing-exercises.core/init}}
+   :devtools {:http-root "public"
+              :http-port 3001}}}}
 
-  :test
-  {:target :node-test
-   :output-to "test.js"
-   :ns-regexp "^drawing-exercises.*-test$"
-   :autorun true}}}
+               
